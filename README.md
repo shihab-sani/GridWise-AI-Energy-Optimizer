@@ -8,7 +8,7 @@
 ## 2. Prerequisites
 - Java 21
 - Maven
-- Docker (for fallback)
+- Docker (for fallback--> https://hub.docker.com/repository/docker/shihabsani/gridwise-optimizer/general) 
 - API Key for LLM Provider (e.g., Google Gemini)
 
 ## 3. Environment Variables
