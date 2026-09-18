@@ -21,73 +21,222 @@
         <div class="bg-slate-800 p-5 rounded-xl border border-slate-700 space-y-4">
             <h2 class="text-lg font-semibold text-slate-200">Execute Scenario</h2>
             <div>
+                <label class="block text-xs font-medium text-slate-400 mb-1">Preset Scenarios</label>
+                <select id="preset" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2 text-sm mb-2">
+                    <option value="sample1">SAMPLE-01: Solar cleaning + distractor</option>
+                    <option value="sample2">SAMPLE-02: Battery charging maintenance</option>
+                    <option value="sample3">SAMPLE-03: Emergency reserve (50%)</option>
+                    <option value="sample10">SAMPLE-10: Multi-constraint evening</option>
+                </select>
+            </div>
+            <div>
                 <label class="block text-xs font-medium text-slate-400 mb-1">Operator Notes (One per line)</label>
                 <textarea id="operatorNotes" rows="4" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-sm focus:outline-none focus:border-emerald-500">Solar output will drop to about 20% from 1 PM to 3 PM.
 Do not charge the battery between 2 PM and 4 PM.
 The cafeteria menu changes tomorrow.</textarea>
             </div>
-            <button onclick="runOptimization()" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-medium py-2.5 rounded-lg transition-colors">Run Optimization</button>
+            <button onclick="runOptimization()" id="runBtn" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-medium py-2.5 rounded-lg transition-colors">Run Optimization</button>
+
+            <!-- Loading Indicator -->
+            <div id="loading" class="hidden text-center text-sm text-slate-400">
+                <span class="inline-block animate-spin">⚙️</span> Calling LLM & optimizing...
+            </div>
+
+            <!-- Error Display -->
+            <div id="error" class="hidden bg-red-900/40 border border-red-500 text-red-200 p-3 rounded-lg text-xs"></div>
         </div>
 
-        <!-- Visualization Charts -->
-        <div class="lg:col-span-2 bg-slate-800 p-5 rounded-xl border border-slate-700 space-y-4">
-            <div class="flex justify-between items-center">
-                <h2 class="text-lg font-semibold text-slate-200">24-Hour Energy Dispatch Schedule</h2>
-                <div id="metrics" class="flex gap-4 text-xs">
-                    <div>Cost: <span id="totalCost" class="font-bold text-emerald-400">0 BDT</span></div>
-                    <div>Grid: <span id="totalGrid" class="font-bold text-cyan-400">0 kWh</span></div>
+        <!-- Right Side: Interpretation + Charts -->
+        <div class="lg:col-span-2 space-y-6">
+            <!-- Directive Interpretation Card -->
+            <div class="bg-slate-800 p-5 rounded-xl border border-slate-700">
+                <h2 class="text-lg font-semibold text-slate-200 mb-3">🧠 LLM Directive Interpretation</h2>
+                <div id="interpretations" class="space-y-2 text-sm">
+                    <p class="text-slate-500 italic">Run a scenario to see how the LLM interprets operator notes.</p>
                 </div>
             </div>
-            <canvas id="energyChart" class="max-h-72"></canvas>
+
+            <!-- Visualization Charts -->
+            <div class="bg-slate-800 p-5 rounded-xl border border-slate-700 space-y-4">
+                <div class="flex justify-between items-center">
+                    <h2 class="text-lg font-semibold text-slate-200">24-Hour Energy Dispatch Schedule</h2>
+                    <div id="metrics" class="flex gap-4 text-xs">
+                        <div>Cost: <span id="totalCost" class="font-bold text-emerald-400">— BDT</span></div>
+                        <div>Grid: <span id="totalGrid" class="font-bold text-cyan-400">— kWh</span></div>
+                        <div>Peak: <span id="peakGrid" class="font-bold text-orange-400">— kWh</span></div>
+                    </div>
+                </div>
+                <canvas id="energyChart" class="max-h-72"></canvas>
+            </div>
         </div>
     </main>
+
+    <footer class="text-xs text-slate-500 text-center pt-4 border-t border-slate-700">
+        Powered by LLM → Guardrails → OjAlgo LP Optimizer &nbsp;|&nbsp; Endpoint: POST /optimize-energy
+    </footer>
 </div>
 
 <script>
     let chart;
-    async function runOptimization() {
-        const notes = document.getElementById('operatorNotes').value.split('\n').filter(n => n.trim() !== '');
 
-        // Build sample payload
-        const sampleHours = Array.from({length: 24}, (_, h) => ({
-            hour: h,
-            demand_kwh: 100 + Math.sin(h/3)*50,
-            solar_kwh: (h >= 6 && h <= 18) ? Math.sin((h-6)/12 * Math.PI)*150 : 0,
-            tariff_bdt_per_kwh: (h >= 17 && h <= 21) ? 25 : 8
-        }));
+    // Realistic hourly profiles for presets (based on public SAMPLE-01)
+    const PRESETS = {
+        sample1: {
+            notes: [
+                "Facilities will wash the rooftop solar panels from noon until 2 PM. During cleaning, usable solar should be treated as roughly 25% of the forecast.",
+                "The sports office moved next month's registration deadline."
+            ],
+            battery: { capacity_kwh: 220, initial_energy_kwh: 110, minimum_energy_kwh: 40, max_charge_kwh_per_hour: 50, max_discharge_kwh_per_hour: 50 }
+        },
+        sample2: {
+            notes: ["The battery charger will be isolated from 2 AM until 5 AM for electrical maintenance."],
+            battery: { capacity_kwh: 200, initial_energy_kwh: 70, minimum_energy_kwh: 30, max_charge_kwh_per_hour: 55, max_discharge_kwh_per_hour: 55 }
+        },
+        sample3: {
+            notes: ["Keep at least 50% of the battery capacity stored in the battery from 6 PM until 9 PM for emergency operations."],
+            battery: { capacity_kwh: 200, initial_energy_kwh: 120, minimum_energy_kwh: 40, max_charge_kwh_per_hour: 50, max_discharge_kwh_per_hour: 50 }
+        },
+        sample10: {
+            notes: [
+                "The data center requires at least 80 kWh to remain in the battery from 6 PM until 10 PM.",
+                "Grid intake must stay at or below 190 kWh from 7 PM until 10 PM while the substation is constrained.",
+                "A seminar room booking was moved to next week."
+            ],
+            battery: { capacity_kwh: 260, initial_energy_kwh: 140, minimum_energy_kwh: 40, max_charge_kwh_per_hour: 65, max_discharge_kwh_per_hour: 65 }
+        }
+    };
+
+    // Realistic 24-hour profile matching the problem statement
+    const HOURS = [
+        {hour:0,demand_kwh:90,solar_kwh:0,tariff_bdt_per_kwh:6},
+        {hour:1,demand_kwh:85,solar_kwh:0,tariff_bdt_per_kwh:6},
+        {hour:2,demand_kwh:80,solar_kwh:0,tariff_bdt_per_kwh:5},
+        {hour:3,demand_kwh:80,solar_kwh:0,tariff_bdt_per_kwh:5},
+        {hour:4,demand_kwh:85,solar_kwh:0,tariff_bdt_per_kwh:5},
+        {hour:5,demand_kwh:95,solar_kwh:0,tariff_bdt_per_kwh:6},
+        {hour:6,demand_kwh:110,solar_kwh:5,tariff_bdt_per_kwh:8},
+        {hour:7,demand_kwh:130,solar_kwh:20,tariff_bdt_per_kwh:10},
+        {hour:8,demand_kwh:150,solar_kwh:50,tariff_bdt_per_kwh:12},
+        {hour:9,demand_kwh:165,solar_kwh:90,tariff_bdt_per_kwh:14},
+        {hour:10,demand_kwh:175,solar_kwh:130,tariff_bdt_per_kwh:16},
+        {hour:11,demand_kwh:180,solar_kwh:160,tariff_bdt_per_kwh:16},
+        {hour:12,demand_kwh:185,solar_kwh:180,tariff_bdt_per_kwh:15},
+        {hour:13,demand_kwh:180,solar_kwh:170,tariff_bdt_per_kwh:14},
+        {hour:14,demand_kwh:170,solar_kwh:140,tariff_bdt_per_kwh:13},
+        {hour:15,demand_kwh:165,solar_kwh:90,tariff_bdt_per_kwh:14},
+        {hour:16,demand_kwh:170,solar_kwh:45,tariff_bdt_per_kwh:18},
+        {hour:17,demand_kwh:185,solar_kwh:10,tariff_bdt_per_kwh:22},
+        {hour:18,demand_kwh:205,solar_kwh:0,tariff_bdt_per_kwh:28},
+        {hour:19,demand_kwh:215,solar_kwh:0,tariff_bdt_per_kwh:30},
+        {hour:20,demand_kwh:205,solar_kwh:0,tariff_bdt_per_kwh:26},
+        {hour:21,demand_kwh:175,solar_kwh:0,tariff_bdt_per_kwh:18},
+        {hour:22,demand_kwh:135,solar_kwh:0,tariff_bdt_per_kwh:10},
+        {hour:23,demand_kwh:105,solar_kwh:0,tariff_bdt_per_kwh:7}
+    ];
+
+    // Load preset when selection changes
+    document.getElementById('preset').addEventListener('change', (e) => {
+        const preset = PRESETS[e.target.value];
+        document.getElementById('operatorNotes').value = preset.notes.join('\n');
+    });
+
+    async function runOptimization() {
+        const runBtn = document.getElementById('runBtn');
+        const loading = document.getElementById('loading');
+        const errorBox = document.getElementById('error');
+
+        // Reset UI
+        errorBox.classList.add('hidden');
+        loading.classList.remove('hidden');
+        runBtn.disabled = true;
+        runBtn.classList.add('opacity-50', 'cursor-not-allowed');
+
+        const notes = document.getElementById('operatorNotes').value.split('\n').map(n => n.trim()).filter(n => n !== '');
+        const presetKey = document.getElementById('preset').value;
+        const preset = PRESETS[presetKey];
 
         const payload = {
-            scenario_id: "DEMO-01",
+            scenario_id: presetKey.toUpperCase(),
             operator_notes: notes,
-            hours: sampleHours,
-            battery: { capacity_kwh: 200, initial_energy_kwh: 100, minimum_energy_kwh: 30, max_charge_kwh_per_hour: 50, max_discharge_kwh_per_hour: 50 }
+            hours: HOURS,
+            battery: preset.battery
         };
 
-        const res = await fetch('/optimize-energy', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
-        const data = await res.json();
+        try {
+            const res = await fetch('/optimize-energy', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
 
-        document.getElementById('totalCost').innerText = `${data.total_cost_bdt} BDT`;
-        document.getElementById('totalGrid').innerText = `${data.total_grid_kwh} kWh`;
+            const data = await res.json();
 
-        const ctx = document.getElementById('energyChart').getContext('2d');
-        if (chart) chart.destroy();
-        chart = new Chart(ctx, {
-            type: 'line',
-            data: {
-                labels: data.hourly_plan.map(p => `H${p.hour}`),
-                datasets: [
-                    { label: 'Grid Import (kWh)', data: data.hourly_plan.map(p => p.grid_kwh), borderColor: '#38bdf8', fill: false },
-                    { label: 'Solar Used (kWh)', data: data.hourly_plan.map(p => p.solar_used_kwh), borderColor: '#facc15', fill: false },
-                    { label: 'Battery Energy (kWh)', data: data.hourly_plan.map(p => p.battery_energy_after_kwh), borderColor: '#34d399', fill: false }
-                ]
-            },
-            options: { responsive: true, scales: { y: { beginAtZero: true } } }
-        });
+            if (!res.ok) {
+                errorBox.classList.remove('hidden');
+                errorBox.innerText = `API Error (${res.status}): ${data.error || 'Unknown error'}`;
+                return;
+            }
+
+            // Update metrics
+            document.getElementById('totalCost').innerText = `${data.total_cost_bdt} BDT`;
+            document.getElementById('totalGrid').innerText = `${data.total_grid_kwh} kWh`;
+            document.getElementById('peakGrid').innerText = `${data.peak_grid_kwh} kWh`;
+
+            // Render directive interpretations
+            const interpDiv = document.getElementById('interpretations');
+            interpDiv.innerHTML = '';
+            data.directive_interpretation.forEach((i) => {
+                const isNoOp = i.directive_type === 'no_op';
+                const badgeColor = isNoOp ? 'bg-slate-600' : 'bg-emerald-600';
+                const structJson = i.structured_adjustment ? JSON.stringify(i.structured_adjustment) : 'null';
+                const el = document.createElement('div');
+                el.className = `p-3 rounded-lg ${isNoOp ? 'bg-slate-900/50' : 'bg-emerald-900/30 border border-emerald-700'}`;
+                el.innerHTML = `
+                    <div class="flex items-center gap-2 mb-1">
+                        <span class="px-2 py-0.5 rounded text-xs font-mono ${badgeColor}">${i.directive_type}</span>
+                        <span class="text-xs text-slate-400">note_index: ${i.note_index}</span>
+                        <span class="text-xs ${i.applies ? 'text-emerald-400' : 'text-slate-500'}">applies: ${i.applies}</span>
+                    </div>
+                    <div class="text-xs text-slate-300 font-mono">${structJson}</div>
+                    <div class="text-xs text-slate-400 italic mt-1">${i.explanation}</div>
+                `;
+                interpDiv.appendChild(el);
+            });
+
+            // Chart
+            const ctx = document.getElementById('energyChart').getContext('2d');
+            if (chart) chart.destroy();
+            chart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: data.hourly_plan.map(p => `H${p.hour}`),
+                    datasets: [
+                        { label: 'Grid Import (kWh)', data: data.hourly_plan.map(p => p.grid_kwh), borderColor: '#38bdf8', backgroundColor: 'rgba(56,189,248,0.1)', fill: true, tension: 0.3 },
+                        { label: 'Solar Used (kWh)', data: data.hourly_plan.map(p => p.solar_used_kwh), borderColor: '#facc15', fill: false, tension: 0.3 },
+                        { label: 'Battery Energy (kWh)', data: data.hourly_plan.map(p => p.battery_energy_after_kwh), borderColor: '#34d399', fill: false, tension: 0.3 }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    plugins: { legend: { labels: { color: '#cbd5e1' } } },
+                    scales: {
+                        y: { beginAtZero: true, ticks: { color: '#94a3b8' }, grid: { color: '#334155' } },
+                        x: { ticks: { color: '#94a3b8' }, grid: { color: '#334155' } }
+                    }
+                }
+            });
+        } catch (err) {
+            errorBox.classList.remove('hidden');
+            errorBox.innerText = `Network error: ${err.message}`;
+        } finally {
+            loading.classList.add('hidden');
+            runBtn.disabled = false;
+            runBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+        }
     }
+
+    // Run once on page load
+    window.addEventListener('load', runOptimization);
 </script>
 </body>
 </html>
