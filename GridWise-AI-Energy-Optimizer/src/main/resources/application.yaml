@@ -1,0 +1,6 @@
+spring:
+  application:
+    name: GridWise-AI-Energy-Optimizer
+
+server:
+  port: 4000

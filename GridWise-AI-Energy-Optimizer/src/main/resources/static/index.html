@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>GridWise — Smart Campus Energy Optimizer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen p-6">
+<div class="max-w-7xl mx-auto space-y-6">
+    <header class="flex justify-between items-center border-b border-slate-700 pb-4">
+        <div>
+            <h1 class="text-2xl font-bold text-emerald-400">GridWise AI Energy Optimizer</h1>
+            <p class="text-sm text-slate-400">BUP CSE FEST 2026 — Smart Campus Energy Management</p>
+        </div>
+        <span class="px-3 py-1 bg-emerald-900/50 text-emerald-300 border border-emerald-500 rounded-full text-xs font-semibold">API Ready: /optimize-energy</span>
+    </header>
+
+    <main class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <!-- Controls Panel -->
+        <div class="bg-slate-800 p-5 rounded-xl border border-slate-700 space-y-4">
+            <h2 class="text-lg font-semibold text-slate-200">Execute Scenario</h2>
+            <div>
+                <label class="block text-xs font-medium text-slate-400 mb-1">Operator Notes (One per line)</label>
+                <textarea id="operatorNotes" rows="4" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-sm focus:outline-none focus:border-emerald-500">Solar output will drop to about 20% from 1 PM to 3 PM.
+Do not charge the battery between 2 PM and 4 PM.
+The cafeteria menu changes tomorrow.</textarea>
+            </div>
+            <button onclick="runOptimization()" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-medium py-2.5 rounded-lg transition-colors">Run Optimization</button>
+        </div>
+
+        <!-- Visualization Charts -->
+        <div class="lg:col-span-2 bg-slate-800 p-5 rounded-xl border border-slate-700 space-y-4">
+            <div class="flex justify-between items-center">
+                <h2 class="text-lg font-semibold text-slate-200">24-Hour Energy Dispatch Schedule</h2>
+                <div id="metrics" class="flex gap-4 text-xs">
+                    <div>Cost: <span id="totalCost" class="font-bold text-emerald-400">0 BDT</span></div>
+                    <div>Grid: <span id="totalGrid" class="font-bold text-cyan-400">0 kWh</span></div>
+                </div>
+            </div>
+            <canvas id="energyChart" class="max-h-72"></canvas>
+        </div>
+    </main>
+</div>
+
+<script>
+    let chart;
+    async function runOptimization() {
+        const notes = document.getElementById('operatorNotes').value.split('\n').filter(n => n.trim() !== '');
+
+        // Build sample payload
+        const sampleHours = Array.from({length: 24}, (_, h) => ({
+            hour: h,
+            demand_kwh: 100 + Math.sin(h/3)*50,
+            solar_kwh: (h >= 6 && h <= 18) ? Math.sin((h-6)/12 * Math.PI)*150 : 0,
+            tariff_bdt_per_kwh: (h >= 17 && h <= 21) ? 25 : 8
+        }));
+
+        const payload = {
+            scenario_id: "DEMO-01",
+            operator_notes: notes,
+            hours: sampleHours,
+            battery: { capacity_kwh: 200, initial_energy_kwh: 100, minimum_energy_kwh: 30, max_charge_kwh_per_hour: 50, max_discharge_kwh_per_hour: 50 }
+        };
+
+        const res = await fetch('/optimize-energy', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+
+        document.getElementById('totalCost').innerText = `${data.total_cost_bdt} BDT`;
+        document.getElementById('totalGrid').innerText = `${data.total_grid_kwh} kWh`;
+
+        const ctx = document.getElementById('energyChart').getContext('2d');
+        if (chart) chart.destroy();
+        chart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: data.hourly_plan.map(p => `H${p.hour}`),
+                datasets: [
+                    { label: 'Grid Import (kWh)', data: data.hourly_plan.map(p => p.grid_kwh), borderColor: '#38bdf8', fill: false },
+                    { label: 'Solar Used (kWh)', data: data.hourly_plan.map(p => p.solar_used_kwh), borderColor: '#facc15', fill: false },
+                    { label: 'Battery Energy (kWh)', data: data.hourly_plan.map(p => p.battery_energy_after_kwh), borderColor: '#34d399', fill: false }
+                ]
+            },
+            options: { responsive: true, scales: { y: { beginAtZero: true } } }
+        });
+    }
+</script>
+</body>
+</html>
